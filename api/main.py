@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
-import anthropic
+from groq import Groq
 import os
 
 app = FastAPI()
@@ -14,7 +14,7 @@ app.add_middleware(
 )
 
 df = pd.read_csv("data/output/health_recommendations.csv")
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 @app.get("/")
 def root():
@@ -59,10 +59,10 @@ async def ai_recommend(user_id: int):
     ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย
     """
     
-    message = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}]
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1024
     )
     
-    return {"recommendation": message.content[0].text}
+    return {"recommendation": response.choices[0].message.content}
