@@ -8,7 +8,7 @@ st.set_page_config(page_title="Health AI Dashboard", layout="wide")
 # ----------------------------
 # LOAD DATA
 # ----------------------------
-df = pd.read_csv("data/output/health_recommendations.csv")
+df = pd.read_csv("../data/output/health_recommendations.csv")
 
 # ----------------------------
 # SIDEBAR

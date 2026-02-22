@@ -1,9 +1,3 @@
+fastapi
+uvicorn
 pandas
-numpy
-scikit-learn
-matplotlib
-seaborn
-kagglehub
-streamlit
-plotly
-pyngrok
