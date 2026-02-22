@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
+import anthropic
+import os
 
 app = FastAPI()
 
@@ -11,8 +13,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# โหลด CSV เดิมที่มีอยู่แล้ว
 df = pd.read_csv("data/output/health_recommendations.csv")
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 @app.get("/")
 def root():
@@ -23,15 +25,6 @@ def get_user(user_id: int):
     user = df.iloc[user_id]
     return user.to_dict()
 
-@app.get("/recommend/{user_id}")
-def get_recommendations(user_id: int):
-    user = df.iloc[user_id]
-    return {
-        "exercise": user["Exercise_Recommendation"],
-        "nutrition": user["Nutrition_Recommendation"],
-        "lifestyle": user["Lifestyle_Recommendation"],
-    }
-
 @app.get("/analytics")
 def get_analytics():
     return {
@@ -40,3 +33,36 @@ def get_analytics():
         "total_users": len(df),
         "segments": df["User_Segment"].value_counts().to_dict()
     }
+
+@app.post("/ai-recommend/{user_id}")
+async def ai_recommend(user_id: int):
+    user = df.iloc[user_id]
+    
+    prompt = f"""
+    คุณเป็น AI Health Coach ผู้เชี่ยวชาญด้านสุขภาพ
+    
+    ข้อมูลสุขภาพของผู้ใช้:
+    - อายุ: {user['Age']} ปี
+    - BMI: {round(user['BMI'], 1)}
+    - คะแนนการนอน: {user['Sleep_Health_Score']}/100
+    - คะแนนการออกกำลังกาย: {user['Activity_Health_Score']}/100
+    - คะแนนหัวใจ: {user['Cardiovascular_Health_Score']}/100
+    - คะแนนสุขภาพจิต: {user['Mental_Health_Score']}/100
+    - คะแนนรวม: {round(user['Overall_Wellness_Score'], 1)}/100
+    
+    กรุณาให้คำแนะนำที่:
+    1. 🏋️ แผนออกกำลังกาย (2-3 ประโยค)
+    2. 🍎 แผนโภชนาการ (2-3 ประโยค)
+    3. 😴 คำแนะนำการนอนและจิตใจ (2-3 ประโยค)
+    4. ⚠️ ความเสี่ยงที่ควรระวัง (1-2 ประโยค)
+    
+    ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย
+    """
+    
+    message = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    return {"recommendation": message.content[0].text}
