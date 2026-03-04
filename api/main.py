@@ -66,3 +66,32 @@ async def ai_recommend(user_id: int):
     )
     
     return {"recommendation": response.choices[0].message.content}
+@app.post("/symptom-check")
+async def symptom_check(data: dict):
+    symptoms = data.get("symptoms", "")
+    age = data.get("age", "ไม่ระบุ")
+    
+    prompt = f"""
+    คุณเป็นแพทย์ AI ผู้เชี่ยวชาญ วิเคราะห์อาการเบื้องต้นเท่านั้น
+    
+    ข้อมูลผู้ป่วย:
+    - อายุ: {age} ปี
+    - อาการ: {symptoms}
+    
+    กรุณาวิเคราะห์:
+    1. 🔍 การวิเคราะห์อาการเบื้องต้น
+    2. ⚠️ ระดับความรุนแรง (เบา/ปานกลาง/รุนแรง)
+    3. 💊 การดูแลตัวเองเบื้องต้น
+    4. 🏥 ควรพบแพทย์เมื่อไหร่
+    
+    ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย
+    ⚠️ แจ้งเตือนว่านี่เป็นเพียงการวิเคราะห์เบื้องต้น ไม่ใช่การวินิจฉัยทางการแพทย์
+    """
+    
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1024
+    )
+    
+    return {"result": response.choices[0].message.content}
