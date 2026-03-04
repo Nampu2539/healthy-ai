@@ -95,3 +95,22 @@ async def symptom_check(data: dict):
     )
     
     return {"result": response.choices[0].message.content}
+@app.post("/chat")
+async def chat(data: dict):
+    messages = data.get("messages", [])
+    
+    system_prompt = {
+        "role": "system",
+        "content": """คุณเป็น AI Health Coach ผู้เชี่ยวชาญด้านสุขภาพ
+        ให้คำแนะนำด้านการออกกำลังกาย โภชนาการ การนอนหลับ และสุขภาพจิต
+        ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย ใช้ emoji ให้เหมาะสม
+        เตือนให้พบแพทย์เมื่ออาการรุนแรง ไม่วินิจฉัยโรค"""
+    }
+    
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[system_prompt] + messages,
+        max_tokens=1024
+    )
+    
+    return {"reply": response.choices[0].message.content}
