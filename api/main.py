@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from openai import OpenAI
+import google.generativeai as genai
+import base64
 import os
 
 app = FastAPI()
@@ -15,10 +17,15 @@ app.add_middleware(
 
 df = pd.read_csv("data/output/health_recommendations.csv")
 
-client = OpenAI(
+# HuggingFace client
+hf_client = OpenAI(
     base_url="https://router.huggingface.co/v1",
     api_key=os.environ.get("HF_TOKEN")
 )
+
+# Gemini Vision
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+vision_model = genai.GenerativeModel("gemini-1.5-flash")
 
 MODEL = "moonshotai/Kimi-K2-Instruct-0905"
 
@@ -44,7 +51,7 @@ SYSTEM_PROMPT = """คุณคือ "หมอเอ" แพทย์ผู้
 - ตอบเป็นภาษาไทยเสมอ"""
 
 def generate(messages):
-    response = client.chat.completions.create(
+    response = hf_client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
         max_tokens=1024,
@@ -111,3 +118,37 @@ async def symptom_check(data: dict):
 async def chat(data: dict):
     messages = data.get("messages", [])
     return {"reply": generate(messages)}
+
+@app.post("/analyze-food")
+async def analyze_food(data: dict):
+    image_base64 = data.get("image", "")
+
+    prompt = """วิเคราะห์อาหารในรูปนี้ครับ ให้ข้อมูลดังนี้:
+
+🍽️ **ชื่ออาหาร** และปริมาณโดยประมาณ
+
+📊 **ข้อมูลโภชนาการ (ต่อ 1 จาน)**
+- 🔥 แคลอรี่: XX kcal
+- 🥩 โปรตีน: XXg
+- 🍚 คาร์โบไฮเดรต: XXg
+- 🧈 ไขมัน: XXg
+- 🧂 โซเดียม: XXmg
+- 🌾 ใยอาหาร: XXg
+
+✅ **ข้อดี** ของอาหารนี้
+
+⚠️ **ข้อควรระวัง**
+
+💡 **คำแนะนำ** สำหรับคนที่ต้องการควบคุมน้ำหนัก/สุขภาพ
+
+ตอบเป็นภาษาไทย กระชับ เข้าใจง่ายครับ
+ถ้าไม่ใช่รูปอาหาร ให้บอกว่า "ไม่พบอาหารในรูปนี้ครับ" """
+
+    image_data = base64.b64decode(image_base64)
+
+    response = vision_model.generate_content([
+        prompt,
+        {"mime_type": "image/jpeg", "data": image_data}
+    ])
+
+    return {"result": response.text}
