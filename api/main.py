@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import base64
 import os
 
@@ -16,9 +17,8 @@ app.add_middleware(
 
 df = pd.read_csv("data/output/health_recommendations.csv")
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-chat_model = genai.GenerativeModel("gemini-2.5-flash")
-vision_model = genai.GenerativeModel("gemini-2.5-flash")
+client_gemini = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+GEMINI_MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = """คุณคือ "นพ.เอกชัย สุขสมบูรณ์" แพทย์ผู้เชี่ยวชาญด้านเวชศาสตร์ครอบครัวและโภชนาการ จบแพทยศาสตร์จากจุฬาลงกรณ์มหาวิทยาลัย มีประสบการณ์ทางคลินิกกว่า 15 ปี และได้รับการฝึกอบรมด้าน Lifestyle Medicine จากสหรัฐอเมริกา
 
@@ -67,15 +67,16 @@ SYSTEM_PROMPT = """คุณคือ "นพ.เอกชัย สุขสม
 def generate(messages):
     history = []
     for m in messages[:-1]:
-        history.append({
-            "role": "user" if m["role"] == "user" else "model",
-            "parts": [m["content"]]
-        })
-    
-    chat = chat_model.start_chat(history=history)
+        role = "user" if m["role"] == "user" else "model"
+        history.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
+
     last_msg = messages[-1]["content"] if messages else ""
     full_prompt = f"{SYSTEM_PROMPT}\n\n{last_msg}" if len(messages) == 1 else last_msg
-    response = chat.send_message(full_prompt)
+
+    response = client_gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=history + [types.Content(role="user", parts=[types.Part(text=full_prompt)])],
+    )
     return response.text
 
 @app.get("/")
@@ -110,13 +111,12 @@ async def ai_recommend(user_id: int):
 - คะแนนสุขภาพจิต: {user['Mental_Health_Score']}/100
 - คะแนนรวม: {round(user['Overall_Wellness_Score'], 1)}/100
 
-กรุณาให้คำแนะนำ:
-1. 🏋️ แผนออกกำลังกาย
-2. 🍎 แผนโภชนาการ
-3. 😴 การนอนและสุขภาพจิต
-4. ⚠️ ความเสี่ยงที่ควรระวัง"""
+กรุณาให้คำแนะนำสุขภาพแบบธรรมชาติ ไม่ใช้ markdown"""
 
-    response = chat_model.generate_content(prompt)
+    response = client_gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
+    )
     return {"recommendation": response.text}
 
 @app.post("/symptom-check")
@@ -127,53 +127,54 @@ async def symptom_check(data: dict):
 
 ผู้ป่วยอายุ {age} ปี มีอาการ: {symptoms}
 
-วิเคราะห์:
-1. 🔍 การวิเคราะห์อาการ
-2. ⚠️ ระดับความรุนแรง
-3. 💊 การดูแลเบื้องต้น
-4. 🏥 ควรพบแพทย์เมื่อไหร่
-5. 🌿 คำแนะนำเพิ่มเติม
+วิเคราะห์อาการเบื้องต้น บอกระดับความรุนแรง การดูแลตัวเอง และควรพบแพทย์เมื่อไหร่
+ตอบแบบธรรมชาติ ไม่ใช้ markdown
+นี่เป็นการวิเคราะห์เบื้องต้นเท่านั้น ไม่ใช่การวินิจฉัยทางการแพทย์"""
 
-⚠️ นี่เป็นการวิเคราะห์เบื้องต้นเท่านั้น"""
-
-    response = chat_model.generate_content(prompt)
+    response = client_gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
+    )
     return {"result": response.text}
 
 @app.post("/chat")
 async def chat(data: dict):
     messages = data.get("messages", [])
     if not messages:
-        return {"reply": "สวัสดีครับ มีอะไรให้ช่วยไหมครับ?"}
+        return {"reply": "สวัสดีครับ มีเรื่องสุขภาพอะไรให้ช่วยไหมครับ?"}
     return {"reply": generate(messages)}
 
 @app.post("/analyze-food")
 async def analyze_food(data: dict):
     image_base64 = data.get("image", "")
+    image_data = base64.b64decode(image_base64)
 
     prompt = """วิเคราะห์อาหารในรูปนี้ครับ ให้ข้อมูลดังนี้:
 
-🍽️ **ชื่ออาหาร** และปริมาณโดยประมาณ
+ชื่ออาหารและปริมาณโดยประมาณ
 
-📊 **ข้อมูลโภชนาการ (ต่อ 1 จาน)**
-- 🔥 แคลอรี่: XX kcal
-- 🥩 โปรตีน: XXg
-- 🍚 คาร์โบไฮเดรต: XXg
-- 🧈 ไขมัน: XXg
-- 🧂 โซเดียม: XXmg
-- 🌾 ใยอาหาร: XXg
+ข้อมูลโภชนาการต่อ 1 จาน:
+แคลอรี่ XX kcal
+โปรตีน XXg
+คาร์โบไฮเดรต XXg
+ไขมัน XXg
+โซเดียม XXmg
+ใยอาหาร XXg
 
-✅ **ข้อดี** ของอาหารนี้
+ข้อดีของอาหารนี้
+ข้อควรระวัง
+คำแนะนำสำหรับคนที่ต้องการควบคุมน้ำหนัก
 
-⚠️ **ข้อควรระวัง**
+ตอบเป็นภาษาไทย กระชับ ไม่ใช้ markdown
+ถ้าไม่ใช่รูปอาหาร ให้บอกว่า ไม่พบอาหารในรูปนี้ครับ"""
 
-💡 **คำแนะนำ** สำหรับคนที่ต้องการควบคุมน้ำหนัก/สุขภาพ
-
-ตอบเป็นภาษาไทย กระชับ เข้าใจง่ายครับ
-ถ้าไม่ใช่รูปอาหาร ให้บอกว่า "ไม่พบอาหารในรูปนี้ครับ" """
-
-    image_data = base64.b64decode(image_base64)
-    response = vision_model.generate_content([
-        prompt,
-        {"mime_type": "image/jpeg", "data": image_data}
-    ])
+    response = client_gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            types.Content(parts=[
+                types.Part(text=prompt),
+                types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_data))
+            ])
+        ]
+    )
     return {"result": response.text}
