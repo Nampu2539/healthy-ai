@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
-from openai import OpenAI
 import google.generativeai as genai
 import base64
 import os
@@ -17,16 +16,9 @@ app.add_middleware(
 
 df = pd.read_csv("data/output/health_recommendations.csv")
 
-# HuggingFace client
-hf_client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=os.environ.get("HF_TOKEN")
-)
-
-# Gemini Vision
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+chat_model = genai.GenerativeModel("gemini-2.5-flash")
 vision_model = genai.GenerativeModel("gemini-2.5-flash")
-MODEL = "moonshotai/Kimi-K2-Instruct-0905"
 
 SYSTEM_PROMPT = """คุณคือ "หมอเอ" แพทย์ผู้เชี่ยวชาญด้านสุขภาพที่เป็นกันเอง อายุ 35 ปี
 
@@ -50,13 +42,18 @@ SYSTEM_PROMPT = """คุณคือ "หมอเอ" แพทย์ผู้
 - ตอบเป็นภาษาไทยเสมอ"""
 
 def generate(messages):
-    response = hf_client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
-        max_tokens=1024,
-        temperature=0.7
-    )
-    return response.choices[0].message.content
+    history = []
+    for m in messages[:-1]:
+        history.append({
+            "role": "user" if m["role"] == "user" else "model",
+            "parts": [m["content"]]
+        })
+    
+    chat = chat_model.start_chat(history=history)
+    last_msg = messages[-1]["content"] if messages else ""
+    full_prompt = f"{SYSTEM_PROMPT}\n\n{last_msg}" if len(messages) == 1 else last_msg
+    response = chat.send_message(full_prompt)
+    return response.text
 
 @app.get("/")
 def root():
@@ -79,7 +76,9 @@ def get_analytics():
 @app.post("/ai-recommend/{user_id}")
 async def ai_recommend(user_id: int):
     user = df.iloc[user_id]
-    prompt = f"""ข้อมูลสุขภาพของผู้ใช้:
+    prompt = f"""{SYSTEM_PROMPT}
+
+ข้อมูลสุขภาพของผู้ใช้:
 - อายุ: {user['Age']} ปี
 - BMI: {round(user['BMI'], 1)}
 - คะแนนการนอน: {user['Sleep_Health_Score']}/100
@@ -94,13 +93,16 @@ async def ai_recommend(user_id: int):
 3. 😴 การนอนและสุขภาพจิต
 4. ⚠️ ความเสี่ยงที่ควรระวัง"""
 
-    return {"recommendation": generate([{"role": "user", "content": prompt}])}
+    response = chat_model.generate_content(prompt)
+    return {"recommendation": response.text}
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
     symptoms = data.get("symptoms", "")
     age = data.get("age", "ไม่ระบุ")
-    prompt = f"""ผู้ป่วยอายุ {age} ปี มีอาการ: {symptoms}
+    prompt = f"""{SYSTEM_PROMPT}
+
+ผู้ป่วยอายุ {age} ปี มีอาการ: {symptoms}
 
 วิเคราะห์:
 1. 🔍 การวิเคราะห์อาการ
@@ -111,11 +113,14 @@ async def symptom_check(data: dict):
 
 ⚠️ นี่เป็นการวิเคราะห์เบื้องต้นเท่านั้น"""
 
-    return {"result": generate([{"role": "user", "content": prompt}])}
+    response = chat_model.generate_content(prompt)
+    return {"result": response.text}
 
 @app.post("/chat")
 async def chat(data: dict):
     messages = data.get("messages", [])
+    if not messages:
+        return {"reply": "สวัสดีครับ มีอะไรให้ช่วยไหมครับ?"}
     return {"reply": generate(messages)}
 
 @app.post("/analyze-food")
@@ -144,10 +149,8 @@ async def analyze_food(data: dict):
 ถ้าไม่ใช่รูปอาหาร ให้บอกว่า "ไม่พบอาหารในรูปนี้ครับ" """
 
     image_data = base64.b64decode(image_base64)
-
     response = vision_model.generate_content([
         prompt,
         {"mime_type": "image/jpeg", "data": image_data}
     ])
-
     return {"result": response.text}
