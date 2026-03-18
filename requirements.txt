@@ -1,4 +1,4 @@
 fastapi
 uvicorn
 pandas
-google-generativeai
+openai
