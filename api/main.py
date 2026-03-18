@@ -16,6 +16,26 @@ app.add_middleware(
 df = pd.read_csv("data/output/health_recommendations.csv")
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+SYSTEM_PROMPT = """คุณคือ Dr. AI ผู้เชี่ยวชาญด้านสุขภาพและการแพทย์ที่มีประสบการณ์กว่า 20 ปี
+
+ความเชี่ยวชาญ:
+- โภชนาการและการควบคุมอาหาร
+- การออกกำลังกายและฟื้นฟูร่างกาย
+- สุขภาพจิตและการจัดการความเครียด
+- โรคเรื้อรังและการป้องกัน
+- การนอนหลับและการฟื้นตัว
+
+วิธีตอบ:
+- ตอบเป็นภาษาไทยเสมอ
+- ใช้ภาษาที่เข้าใจง่าย ไม่ใช้ศัพท์แพทย์มากเกินไป
+- ให้คำแนะนำที่เป็นรูปธรรม ทำได้จริง
+- แสดงความห่วงใยและเข้าใจผู้ป่วย
+- ใช้ emoji ประกอบให้เหมาะสม
+- ถ้าอาการรุนแรง ให้แนะนำพบแพทย์ทันที
+- ไม่วินิจฉัยโรคโดยตรง แต่ให้ข้อมูลเบื้องต้นได้"""
+
+MODEL = "mixtral-8x7b-32768"
+
 @app.get("/")
 def root():
     return {"status": "Health AI API Running ✅"}
@@ -38,79 +58,98 @@ def get_analytics():
 async def ai_recommend(user_id: int):
     user = df.iloc[user_id]
     
-    prompt = f"""
-    คุณเป็น AI Health Coach ผู้เชี่ยวชาญด้านสุขภาพ
-    
-    ข้อมูลสุขภาพของผู้ใช้:
-    - อายุ: {user['Age']} ปี
-    - BMI: {round(user['BMI'], 1)}
-    - คะแนนการนอน: {user['Sleep_Health_Score']}/100
-    - คะแนนการออกกำลังกาย: {user['Activity_Health_Score']}/100
-    - คะแนนหัวใจ: {user['Cardiovascular_Health_Score']}/100
-    - คะแนนสุขภาพจิต: {user['Mental_Health_Score']}/100
-    - คะแนนรวม: {round(user['Overall_Wellness_Score'], 1)}/100
-    
-    กรุณาให้คำแนะนำที่:
-    1. 🏋️ แผนออกกำลังกาย (2-3 ประโยค)
-    2. 🍎 แผนโภชนาการ (2-3 ประโยค)
-    3. 😴 คำแนะนำการนอนและจิตใจ (2-3 ประโยค)
-    4. ⚠️ ความเสี่ยงที่ควรระวัง (1-2 ประโยค)
-    
-    ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย
-    """
-    
+    prompt = f"""คุณคือ Dr. AI ผู้เชี่ยวชาญด้านสุขภาพ วิเคราะห์ข้อมูลสุขภาพและให้คำแนะนำเฉพาะบุคคล
+
+ข้อมูลสุขภาพของผู้ใช้:
+- อายุ: {user['Age']} ปี
+- BMI: {round(user['BMI'], 1)}
+- คะแนนการนอน: {user['Sleep_Health_Score']}/100
+- คะแนนการออกกำลังกาย: {user['Activity_Health_Score']}/100
+- คะแนนหัวใจ: {user['Cardiovascular_Health_Score']}/100
+- คะแนนสุขภาพจิต: {user['Mental_Health_Score']}/100
+- คะแนนรวม: {round(user['Overall_Wellness_Score'], 1)}/100
+
+กรุณาให้คำแนะนำที่ละเอียดและเป็นรูปธรรม:
+
+1. 🏋️ **แผนออกกำลังกาย**
+   - ประเภทการออกกำลังกายที่เหมาะสม
+   - ความถี่และระยะเวลา
+
+2. 🍎 **แผนโภชนาการ**
+   - อาหารที่ควรเพิ่ม/ลด
+   - เวลาและปริมาณที่เหมาะสม
+
+3. 😴 **การนอนและสุขภาพจิต**
+   - วิธีปรับปรุงคุณภาพการนอน
+   - การจัดการความเครียด
+
+4. ⚠️ **ความเสี่ยงที่ควรระวัง**
+   - จุดที่ต้องให้ความสนใจเป็นพิเศษ
+
+ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย"""
+
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1024
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=1024,
+        temperature=0.5
     )
     
     return {"recommendation": response.choices[0].message.content}
+
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
     symptoms = data.get("symptoms", "")
     age = data.get("age", "ไม่ระบุ")
     
-    prompt = f"""
-    คุณเป็นแพทย์ AI ผู้เชี่ยวชาญ วิเคราะห์อาการเบื้องต้นเท่านั้น
-    
-    ข้อมูลผู้ป่วย:
-    - อายุ: {age} ปี
-    - อาการ: {symptoms}
-    
-    กรุณาวิเคราะห์:
-    1. 🔍 การวิเคราะห์อาการเบื้องต้น
-    2. ⚠️ ระดับความรุนแรง (เบา/ปานกลาง/รุนแรง)
-    3. 💊 การดูแลตัวเองเบื้องต้น
-    4. 🏥 ควรพบแพทย์เมื่อไหร่
-    
-    ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย
-    ⚠️ แจ้งเตือนว่านี่เป็นเพียงการวิเคราะห์เบื้องต้น ไม่ใช่การวินิจฉัยทางการแพทย์
-    """
-    
+    prompt = f"""ผู้ป่วยอายุ {age} ปี มีอาการ: {symptoms}
+
+กรุณาวิเคราะห์อย่างละเอียดดังนี้:
+
+1. 🔍 **การวิเคราะห์อาการ**
+   - อธิบายอาการที่พบและความเชื่อมโยง
+
+2. ⚠️ **ระดับความรุนแรง**
+   - เบา / ปานกลาง / รุนแรง พร้อมเหตุผล
+
+3. 💊 **การดูแลเบื้องต้น**
+   - สิ่งที่ควรทำทันที
+   - สิ่งที่ควรหลีกเลี่ยง
+
+4. 🏥 **ควรพบแพทย์เมื่อไหร่**
+   - สัญญาณเตือนที่ต้องรีบพบแพทย์
+
+5. 🌿 **คำแนะนำเพิ่มเติม**
+   - อาหาร การพักผ่อน การดูแลตัวเอง
+
+⚠️ หมายเหตุ: นี่เป็นการวิเคราะห์เบื้องต้นเท่านั้น ไม่ใช่การวินิจฉัยทางการแพทย์"""
+
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1024
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=1024,
+        temperature=0.3
     )
     
     return {"result": response.choices[0].message.content}
+
 @app.post("/chat")
 async def chat(data: dict):
     messages = data.get("messages", [])
     
-    system_prompt = {
-        "role": "system",
-        "content": """คุณเป็น AI Health Coach ผู้เชี่ยวชาญด้านสุขภาพ
-        ให้คำแนะนำด้านการออกกำลังกาย โภชนาการ การนอนหลับ และสุขภาพจิต
-        ตอบเป็นภาษาไทย กระชับ เข้าใจง่าย ใช้ emoji ให้เหมาะสม
-        เตือนให้พบแพทย์เมื่ออาการรุนแรง ไม่วินิจฉัยโรค"""
-    }
-    
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[system_prompt] + messages,
-        max_tokens=1024
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT}
+        ] + messages,
+        max_tokens=1024,
+        temperature=0.7
     )
     
     return {"reply": response.choices[0].message.content}
