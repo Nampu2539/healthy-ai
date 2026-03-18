@@ -25,7 +25,7 @@ hf_client = OpenAI(
 
 # Gemini Vision
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-vision_model = genai.GenerativeModel("gemini-2.0-flash")
+vision_model = genai.GenerativeModel("gemini-2.5-flash")
 MODEL = "moonshotai/Kimi-K2-Instruct-0905"
 
 SYSTEM_PROMPT = """คุณคือ "หมอเอ" แพทย์ผู้เชี่ยวชาญด้านสุขภาพที่เป็นกันเอง อายุ 35 ปี
