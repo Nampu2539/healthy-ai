@@ -4,6 +4,7 @@ import pandas as pd
 from google import genai
 from google.genai import types
 import base64
+import json
 import os
 
 app = FastAPI()
@@ -144,3 +145,82 @@ async def analyze_food(data: dict):
         )
     )
     return {"result": response.text}
+
+@app.post("/calculate-wellness")
+async def calculate_wellness(data: dict):
+    age = data.get("age", 25)
+    weight = data.get("weight", 60)
+    height = data.get("height", 170)
+    sleep_hours = data.get("sleep_hours", 7)
+    activity_level = data.get("activity_level", 3)
+    gender = data.get("gender", "male")
+
+    height_m = height / 100
+    bmi = round(weight / (height_m ** 2), 1)
+    bmi_category = (
+        "ผอม" if bmi < 18.5 else
+        "ปกติ" if bmi <= 24.9 else
+        "น้ำหนักเกิน" if bmi <= 29.9 else "อ้วน"
+    )
+
+    activity_labels = {
+        1: "ไม่ค่อยขยับเลย นั่งทำงานตลอดวัน",
+        2: "เดินบ้างเล็กน้อย ไม่ค่อยออกกำลังกาย",
+        3: "ออกกำลังกายบ้าง 1-2 ครั้งต่อสัปดาห์",
+        4: "ออกกำลังกายสม่ำเสมอ 3-4 ครั้งต่อสัปดาห์",
+        5: "ออกกำลังกายหนักมาก 5-7 ครั้งต่อสัปดาห์",
+    }
+
+    prompt = f"""วิเคราะห์สุขภาพของบุคคลนี้และให้คะแนนแต่ละด้าน
+
+ข้อมูล:
+เพศ: {"ชาย" if gender == "male" else "หญิง"}
+อายุ: {age} ปี
+น้ำหนัก: {weight} กก.
+ส่วนสูง: {height} ซม.
+BMI: {bmi} ({bmi_category})
+ชั่วโมงนอน: {sleep_hours} ชั่วโมงต่อคืน
+ระดับการออกกำลังกาย: {activity_labels.get(activity_level, "")}
+
+ให้วิเคราะห์และตอบกลับเป็น JSON เท่านั้น ห้ามมีข้อความอื่น รูปแบบดังนี้:
+{{
+  "sleep_score": 0-100,
+  "activity_score": 0-100,
+  "cardiovascular_score": 0-100,
+  "mental_score": 0-100,
+  "overall_score": 0-100,
+  "summary": "สรุปสุขภาพ 2-3 ประโยคแบบธรรมชาติ ไม่ใช้ markdown",
+  "advice": "คำแนะนำสั้นๆ 1-2 ประโยค ไม่ใช้ markdown"
+}}"""
+
+    response = client_gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=types.GenerateContentConfig(
+            system_instruction="คุณเป็นแพทย์ผู้เชี่ยวชาญ วิเคราะห์สุขภาพและตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่นนอกจาก JSON",
+            temperature=0.3,
+        )
+    )
+
+    text = response.text.strip()
+    text = text.replace("```json", "").replace("```", "").strip()
+    ai_result = json.loads(text)
+
+    overall_score = ai_result.get("overall_score", 0)
+    percentile = len(df[df["Overall_Wellness_Score"] < overall_score]) / len(df) * 100
+    avg_wellness = float(df["Overall_Wellness_Score"].mean())
+
+    return {
+        "bmi": bmi,
+        "bmi_category": bmi_category,
+        "sleep_score": ai_result.get("sleep_score", 0),
+        "activity_score": ai_result.get("activity_score", 0),
+        "cardiovascular_score": ai_result.get("cardiovascular_score", 0),
+        "mental_score": ai_result.get("mental_score", 0),
+        "overall_score": overall_score,
+        "summary": ai_result.get("summary", ""),
+        "advice": ai_result.get("advice", ""),
+        "avg_wellness": round(avg_wellness, 1),
+        "percentile": round(percentile, 1),
+        "total_users": len(df)
+    }
