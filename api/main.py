@@ -195,8 +195,6 @@ def reset_limiter():
 
 @app.post("/ai-recommend/{user_id}")
 async def ai_recommend(user_id: int):
-    check_rate_limit("ai_recommend")
-    
     user = df.iloc[user_id]
     prompt = f"""ข้อมูลสุขภาพของผู้ใช้:
 อายุ {user['Age']} ปี BMI {round(user['BMI'], 1)} คะแนนการนอน {user['Sleep_Health_Score']}/100 คะแนนการออกกำลังกาย {user['Activity_Health_Score']}/100 คะแนนหัวใจ {user['Cardiovascular_Health_Score']}/100 คะแนนสุขภาพจิต {user['Mental_Health_Score']}/100 คะแนนรวม {round(user['Overall_Wellness_Score'], 1)}/100
@@ -231,8 +229,6 @@ async def ai_recommend(user_id: int):
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
-    check_rate_limit("symptom_check")
-    
     symptoms = data.get("symptoms", "")
     age = data.get("age", "ไม่ระบุ")
     prompt = f"""ผู้ป่วยอายุ {age} ปี มีอาการ {symptoms}
@@ -269,8 +265,6 @@ async def symptom_check(data: dict):
 
 @app.post("/chat")
 async def chat(data: dict):
-    check_rate_limit("chat")
-    
     messages = data.get("messages", [])
     if not messages:
         return {"reply": "สวัสดีครับ มีเรื่องสุขภาพอะไรให้ช่วยไหมครับ?"}
@@ -295,9 +289,6 @@ async def chat(data: dict):
 
 @app.post("/analyze-food")
 async def analyze_food(data: dict):
-    # Rate limiting
-    check_rate_limit("analyze_food")
-    
     image_base64 = data.get("image", "")
     image_hash = get_image_hash(image_base64)
     
@@ -345,8 +336,6 @@ async def analyze_food(data: dict):
 
 @app.post("/calculate-wellness")
 async def calculate_wellness(data: dict):
-    check_rate_limit("calculate_wellness")
-    
     age = data.get("age", 25)
     weight = data.get("weight", 60)
     height = data.get("height", 170)
