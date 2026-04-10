@@ -81,12 +81,10 @@ def generate(messages):
         )
         return response.text
     except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
 
 
 @app.get("/")
@@ -125,13 +123,11 @@ async def ai_recommend(user_id: int):
             )
         )
         return {"recommendation": response.text}
-    except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+    except ServerError:
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
@@ -153,13 +149,11 @@ async def symptom_check(data: dict):
             )
         )
         return {"result": response.text}
-    except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+    except ServerError:
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/chat")
 async def chat(data: dict):
@@ -169,13 +163,11 @@ async def chat(data: dict):
     
     try:
         return {"reply": generate(messages)}
-    except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+    except ServerError:
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/analyze-food")
 async def analyze_food(data: dict):
@@ -199,13 +191,11 @@ async def analyze_food(data: dict):
             )
         )
         return {"result": response.text}
-    except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+    except ServerError:
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/calculate-wellness")
 async def calculate_wellness(data: dict):
@@ -286,13 +276,11 @@ BMI: {bmi} ({bmi_category})
             "percentile": round(percentile, 1),
             "total_users": len(df)
         }
-    except ServerError as e:
-        if e.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
-            )
-        raise
+    except ServerError:
+        raise HTTPException(
+            status_code=503,
+            detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
     except json.JSONDecodeError:
         raise HTTPException(
             status_code=500,
