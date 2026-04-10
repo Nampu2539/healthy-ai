@@ -7,6 +7,9 @@ from google.genai.errors import ServerError, ClientError
 import base64
 import json
 import os
+import hashlib
+import time
+from collections import defaultdict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 app = FastAPI()
@@ -17,6 +20,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# ━━━ Rate Limiting & Caching ━━━
+ANALYSIS_CACHE = {}  # {image_hash: (result, timestamp)}
+CACHE_TTL = 3600  # 1 hour
+RATE_LIMIT_WINDOW = 60  # requests per 60 seconds
+MAX_REQUESTS_PER_MINUTE = 4  # Keep 1 buffer for Google's limit
+request_tracker = defaultdict(list)  # {endpoint: [timestamp1, timestamp2, ...]}
+
+def get_image_hash(image_base64):
+    """Generate hash of image for caching purposes"""
+    return hashlib.md5(image_base64.encode()).hexdigest()
+
+def check_rate_limit(endpoint: str):
+    """Check if endpoint is within rate limits"""
+    now = time.time()
+    # Clean old requests outside the window
+    request_tracker[endpoint] = [t for t in request_tracker[endpoint] if now - t < RATE_LIMIT_WINDOW]
+    
+    if len(request_tracker[endpoint]) >= MAX_REQUESTS_PER_MINUTE:
+        oldest_request = request_tracker[endpoint][0]
+        retry_after = int(RATE_LIMIT_WINDOW - (now - oldest_request)) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"ใช้ AI หนักเกินไป รอ {retry_after} วินาที แล้วลองใหม่นะครับ"
+        )
+    
+    request_tracker[endpoint].append(now)
+
+def get_cached_result(image_hash):
+    """Get cached analysis result if exists and not expired"""
+    if image_hash in ANALYSIS_CACHE:
+        result, timestamp = ANALYSIS_CACHE[image_hash]
+        if time.time() - timestamp < CACHE_TTL:
+            return result
+        else:
+            del ANALYSIS_CACHE[image_hash]
+    return None
+
+def set_cached_result(image_hash, result):
+    """Cache analysis result"""
+    ANALYSIS_CACHE[image_hash] = (result, time.time())
 
 df = pd.read_csv("data/output/health_recommendations.csv")
 
@@ -123,6 +167,8 @@ def get_analytics():
 
 @app.post("/ai-recommend/{user_id}")
 async def ai_recommend(user_id: int):
+    check_rate_limit("ai_recommend")
+    
     user = df.iloc[user_id]
     prompt = f"""ข้อมูลสุขภาพของผู้ใช้:
 อายุ {user['Age']} ปี BMI {round(user['BMI'], 1)} คะแนนการนอน {user['Sleep_Health_Score']}/100 คะแนนการออกกำลังกาย {user['Activity_Health_Score']}/100 คะแนนหัวใจ {user['Cardiovascular_Health_Score']}/100 คะแนนสุขภาพจิต {user['Mental_Health_Score']}/100 คะแนนรวม {round(user['Overall_Wellness_Score'], 1)}/100
@@ -157,6 +203,8 @@ async def ai_recommend(user_id: int):
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
+    check_rate_limit("symptom_check")
+    
     symptoms = data.get("symptoms", "")
     age = data.get("age", "ไม่ระบุ")
     prompt = f"""ผู้ป่วยอายุ {age} ปี มีอาการ {symptoms}
@@ -193,6 +241,8 @@ async def symptom_check(data: dict):
 
 @app.post("/chat")
 async def chat(data: dict):
+    check_rate_limit("chat")
+    
     messages = data.get("messages", [])
     if not messages:
         return {"reply": "สวัสดีครับ มีเรื่องสุขภาพอะไรให้ช่วยไหมครับ?"}
@@ -217,7 +267,17 @@ async def chat(data: dict):
 
 @app.post("/analyze-food")
 async def analyze_food(data: dict):
+    # Rate limiting
+    check_rate_limit("analyze_food")
+    
     image_base64 = data.get("image", "")
+    image_hash = get_image_hash(image_base64)
+    
+    # Check cache first
+    cached_result = get_cached_result(image_hash)
+    if cached_result:
+        return {"result": cached_result, "cached": True}
+    
     image_data = base64.b64decode(image_base64)
 
     prompt = """วิเคราะห์อาหารในรูปนี้ครับ บอกชื่ออาหารและปริมาณโดยประมาณ จากนั้นบอกข้อมูลโภชนาการต่อ 1 จาน ได้แก่ แคลอรี่ โปรตีน คาร์โบไฮเดรต ไขมัน โซเดียม และใยอาหาร แล้วบอกข้อดี ข้อควรระวัง และคำแนะนำสำหรับคนควบคุมน้ำหนัก ตอบเป็นย่อหน้าธรรมดา ห้ามใช้ markdown ห้ามใช้ข้อๆ ถ้าไม่ใช่รูปอาหาร ให้บอกว่า ไม่พบอาหารในรูปนี้ครับ"""
@@ -236,7 +296,9 @@ async def analyze_food(data: dict):
                 temperature=0.3,
             )
         )
-        return {"result": response.text}
+        result = response.text
+        set_cached_result(image_hash, result)
+        return {"result": result, "cached": False}
     except ServerError:
         raise HTTPException(
             status_code=503,
@@ -255,6 +317,8 @@ async def analyze_food(data: dict):
 
 @app.post("/calculate-wellness")
 async def calculate_wellness(data: dict):
+    check_rate_limit("calculate_wellness")
+    
     age = data.get("age", 25)
     weight = data.get("weight", 60)
     height = data.get("height", 170)
