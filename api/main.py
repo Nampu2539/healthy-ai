@@ -25,7 +25,7 @@ app.add_middleware(
 ANALYSIS_CACHE = {}  # {image_hash: (result, timestamp)}
 CACHE_TTL = 3600  # 1 hour
 RATE_LIMIT_WINDOW = 60  # requests per 60 seconds
-MAX_REQUESTS_PER_MINUTE = 4  # Keep 1 buffer for Google's limit
+MAX_REQUESTS_PER_MINUTE = 6  # More lenient: 6 req/min (Google: 5 req/min + buffer)
 request_tracker = defaultdict(list)  # {endpoint: [timestamp1, timestamp2, ...]}
 
 def get_image_hash(image_base64):
@@ -36,11 +36,16 @@ def check_rate_limit(endpoint: str):
     """Check if endpoint is within rate limits"""
     now = time.time()
     # Clean old requests outside the window
+    old_count = len(request_tracker[endpoint])
     request_tracker[endpoint] = [t for t in request_tracker[endpoint] if now - t < RATE_LIMIT_WINDOW]
+    cleaned_count = old_count - len(request_tracker[endpoint])
+    
+    print(f"[{endpoint}] Requests in window: {len(request_tracker[endpoint])}/{MAX_REQUESTS_PER_MINUTE} (cleaned {cleaned_count} old)")
     
     if len(request_tracker[endpoint]) >= MAX_REQUESTS_PER_MINUTE:
         oldest_request = request_tracker[endpoint][0]
         retry_after = int(RATE_LIMIT_WINDOW - (now - oldest_request)) + 1
+        print(f"[{endpoint}] RATE LIMITED - retry after {retry_after}s")
         raise HTTPException(
             status_code=429,
             detail=f"ใช้ AI หนักเกินไป รอ {retry_after} วินาที แล้วลองใหม่นะครับ"
@@ -164,6 +169,29 @@ def get_analytics():
         "total_users": len(df),
         "segments": df["User_Segment"].value_counts().to_dict()
     }
+
+@app.get("/status")
+def status():
+    """Check current rate limit status for all endpoints"""
+    now = time.time()
+    status_info = {}
+    for endpoint, timestamps in request_tracker.items():
+        # Clean old requests
+        active = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+        status_info[endpoint] = {
+            "requests_in_window": len(active),
+            "max_allowed": MAX_REQUESTS_PER_MINUTE,
+            "limited": len(active) >= MAX_REQUESTS_PER_MINUTE
+        }
+    return {"rate_limits": status_info, "cache_size": len(ANALYSIS_CACHE)}
+
+@app.post("/reset-limiter")
+def reset_limiter():
+    """Reset rate limiter (for testing/debugging only)"""
+    global request_tracker, ANALYSIS_CACHE
+    request_tracker.clear()
+    ANALYSIS_CACHE.clear()
+    return {"message": "Rate limiter and cache reset", "status": "OK"}
 
 @app.post("/ai-recommend/{user_id}")
 async def ai_recommend(user_id: int):
