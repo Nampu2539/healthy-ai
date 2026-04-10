@@ -1,11 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError
 import base64
 import json
 import os
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 app = FastAPI()
 
@@ -43,6 +45,23 @@ SYSTEM_PROMPT = """คุณคือ "นพ.เอกชัย สุขสม
 ขอบเขตการให้คำปรึกษา:
 ให้ข้อมูลและคำแนะนำเบื้องต้นได้เฉพาะเรื่องสุขภาพเท่านั้น ไม่วินิจฉัยโรคหรือสั่งยาโดยตรง ถ้าอาการน่าเป็นห่วงให้แนะนำพบแพทย์จริง ไม่แนะนำขนาดยาหรือการหยุดยาที่แพทย์สั่ง"""
 
+
+# ━━━ Retry Decorator for Gemini API calls ━━━
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(ServerError),
+    reraise=True
+)
+def call_gemini_generate(model, contents, config):
+    """Helper function to call Gemini API with automatic retry on 503 errors"""
+    return client_gemini.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config
+    )
+
+
 def generate(messages):
     history = []
     for m in messages[:-1]:
@@ -51,15 +70,24 @@ def generate(messages):
 
     last_msg = messages[-1]["content"] if messages else ""
 
-    response = client_gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=history + [types.Content(role="user", parts=[types.Part(text=last_msg)])],
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.7,
+    try:
+        response = call_gemini_generate(
+            model=GEMINI_MODEL,
+            contents=history + [types.Content(role="user", parts=[types.Part(text=last_msg)])],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.7,
+            )
         )
-    )
-    return response.text
+        return response.text
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
+
 
 @app.get("/")
 def root():
@@ -87,15 +115,23 @@ async def ai_recommend(user_id: int):
 
 ให้คำแนะนำสุขภาพแบบธรรมชาติ เป็นย่อหน้าปกติ ห้ามใช้ markdown ห้ามใช้ข้อๆ"""
 
-    response = client_gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.5,
+    try:
+        response = call_gemini_generate(
+            model=GEMINI_MODEL,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.5,
+            )
         )
-    )
-    return {"recommendation": response.text}
+        return {"recommendation": response.text}
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
@@ -107,22 +143,39 @@ async def symptom_check(data: dict):
 ตอบเป็นย่อหน้าธรรมดา ห้ามใช้ markdown ห้ามใช้ข้อๆ
 นี่เป็นการวิเคราะห์เบื้องต้นเท่านั้น"""
 
-    response = client_gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.3,
+    try:
+        response = call_gemini_generate(
+            model=GEMINI_MODEL,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.3,
+            )
         )
-    )
-    return {"result": response.text}
+        return {"result": response.text}
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
 
 @app.post("/chat")
 async def chat(data: dict):
     messages = data.get("messages", [])
     if not messages:
         return {"reply": "สวัสดีครับ มีเรื่องสุขภาพอะไรให้ช่วยไหมครับ?"}
-    return {"reply": generate(messages)}
+    
+    try:
+        return {"reply": generate(messages)}
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
 
 @app.post("/analyze-food")
 async def analyze_food(data: dict):
@@ -131,20 +184,28 @@ async def analyze_food(data: dict):
 
     prompt = """วิเคราะห์อาหารในรูปนี้ครับ บอกชื่ออาหารและปริมาณโดยประมาณ จากนั้นบอกข้อมูลโภชนาการต่อ 1 จาน ได้แก่ แคลอรี่ โปรตีน คาร์โบไฮเดรต ไขมัน โซเดียม และใยอาหาร แล้วบอกข้อดี ข้อควรระวัง และคำแนะนำสำหรับคนควบคุมน้ำหนัก ตอบเป็นย่อหน้าธรรมดา ห้ามใช้ markdown ห้ามใช้ข้อๆ ถ้าไม่ใช่รูปอาหาร ให้บอกว่า ไม่พบอาหารในรูปนี้ครับ"""
 
-    response = client_gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            types.Content(parts=[
-                types.Part(text=prompt),
-                types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_data))
-            ])
-        ],
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.3,
+    try:
+        response = call_gemini_generate(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Content(parts=[
+                    types.Part(text=prompt),
+                    types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_data))
+                ])
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.3,
+            )
         )
-    )
-    return {"result": response.text}
+        return {"result": response.text}
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
 
 @app.post("/calculate-wellness")
 async def calculate_wellness(data: dict):
@@ -193,34 +254,47 @@ BMI: {bmi} ({bmi_category})
   "advice": "คำแนะนำสั้นๆ 1-2 ประโยค ไม่ใช้ markdown"
 }}"""
 
-    response = client_gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-        config=types.GenerateContentConfig(
-            system_instruction="คุณเป็นแพทย์ผู้เชี่ยวชาญ วิเคราะห์สุขภาพและตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่นนอกจาก JSON",
-            temperature=0.3,
+    try:
+        response = call_gemini_generate(
+            model=GEMINI_MODEL,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(
+                system_instruction="คุณเป็นแพทย์ผู้เชี่ยวชาญ วิเคราะห์สุขภาพและตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่นนอกจาก JSON",
+                temperature=0.3,
+            )
         )
-    )
 
-    text = response.text.strip()
-    text = text.replace("```json", "").replace("```", "").strip()
-    ai_result = json.loads(text)
+        text = response.text.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        ai_result = json.loads(text)
 
-    overall_score = ai_result.get("overall_score", 0)
-    percentile = len(df[df["Overall_Wellness_Score"] < overall_score]) / len(df) * 100
-    avg_wellness = float(df["Overall_Wellness_Score"].mean())
+        overall_score = ai_result.get("overall_score", 0)
+        percentile = len(df[df["Overall_Wellness_Score"] < overall_score]) / len(df) * 100
+        avg_wellness = float(df["Overall_Wellness_Score"].mean())
 
-    return {
-        "bmi": bmi,
-        "bmi_category": bmi_category,
-        "sleep_score": ai_result.get("sleep_score", 0),
-        "activity_score": ai_result.get("activity_score", 0),
-        "cardiovascular_score": ai_result.get("cardiovascular_score", 0),
-        "mental_score": ai_result.get("mental_score", 0),
-        "overall_score": overall_score,
-        "summary": ai_result.get("summary", ""),
-        "advice": ai_result.get("advice", ""),
-        "avg_wellness": round(avg_wellness, 1),
-        "percentile": round(percentile, 1),
-        "total_users": len(df)
-    }
+        return {
+            "bmi": bmi,
+            "bmi_category": bmi_category,
+            "sleep_score": ai_result.get("sleep_score", 0),
+            "activity_score": ai_result.get("activity_score", 0),
+            "cardiovascular_score": ai_result.get("cardiovascular_score", 0),
+            "mental_score": ai_result.get("mental_score", 0),
+            "overall_score": overall_score,
+            "summary": ai_result.get("summary", ""),
+            "advice": ai_result.get("advice", ""),
+            "avg_wellness": round(avg_wellness, 1),
+            "percentile": round(percentile, 1),
+            "total_users": len(df)
+        }
+    except ServerError as e:
+        if e.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+            )
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="ไม่สามารถแปลงผลลัพธ์เป็น JSON ได้ลองใหม่"
+        )
