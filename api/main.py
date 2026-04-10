@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from google import genai
 from google.genai import types
-from google.genai.errors import ServerError
+from google.genai.errors import ServerError, ClientError
 import base64
 import json
 import os
@@ -47,6 +47,12 @@ SYSTEM_PROMPT = """คุณคือ "นพ.เอกชัย สุขสม
 
 
 # ━━━ Retry Decorator for Gemini API calls ━━━
+def should_retry_gemini_error(exception):
+    """Only retry on ServerError (503), not on ClientError (429 rate limit)"""
+    if isinstance(exception, ServerError):
+        return True
+    return False
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -54,7 +60,7 @@ SYSTEM_PROMPT = """คุณคือ "นพ.เอกชัย สุขสม
     reraise=True
 )
 def call_gemini_generate(model, contents, config):
-    """Helper function to call Gemini API with automatic retry on 503 errors"""
+    """Helper function to call Gemini API with automatic retry on 503 errors only"""
     return client_gemini.models.generate_content(
         model=model,
         contents=contents,
@@ -80,10 +86,20 @@ def generate(messages):
             )
         )
         return response.text
-    except ServerError as e:
+    except ServerError:
         raise HTTPException(
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
 
@@ -128,6 +144,16 @@ async def ai_recommend(user_id: int):
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
         )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/symptom-check")
 async def symptom_check(data: dict):
@@ -154,6 +180,16 @@ async def symptom_check(data: dict):
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
         )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
+        )
 
 @app.post("/chat")
 async def chat(data: dict):
@@ -167,6 +203,16 @@ async def chat(data: dict):
         raise HTTPException(
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
 @app.post("/analyze-food")
@@ -195,6 +241,16 @@ async def analyze_food(data: dict):
         raise HTTPException(
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
 @app.post("/calculate-wellness")
@@ -280,6 +336,16 @@ BMI: {bmi} ({bmi_category})
         raise HTTPException(
             status_code=503,
             detail="Google AI API ยุ่งอยู่ลองใหม่ในสักครู่นะครับ"
+        )
+    except ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise HTTPException(
+                status_code=429,
+                detail="ใช้ AI หนักเกินไป รอสักครู่แล้วลองใหม่นะครับ"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
     except json.JSONDecodeError:
         raise HTTPException(
