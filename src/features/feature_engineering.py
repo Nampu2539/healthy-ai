@@ -42,10 +42,24 @@ def create_health_scores():
     # -------------------------------------------------
     # 4️⃣ Mental Health Score (synthetic)
     # -------------------------------------------------
-    print("🧠 Creating Mental Health Score...")
+    # -------------------------------------------------
+    # 4️⃣ Mental Health Score (deterministic, based on lifestyle factors)
+    #    Sleep quality     40%  — closer to 8h = better
+    #    Physical activity 40%  — more exercise = better
+    #    Heart rate        20%  — closer to 70 bpm = better
+    # -------------------------------------------------
+    print("🧠 Creating Mental Health Score (deterministic)...")
 
-    np.random.seed(42)
-    df["Mental_Health_Score"] = np.random.uniform(50, 100, len(df))
+    sleep_contrib    = np.clip(100 - abs(df["Hours_of_Sleep"] - 8) * 12.5, 0, 100)
+    activity_contrib = np.clip((df["Exercise_Hours_per_Week"] / 10) * 100,  0, 100)
+    hr_contrib       = np.clip(100 - abs(df["Heart_Rate"] - 70) * 1.5,      0, 100)
+
+    df["Mental_Health_Score"] = np.clip(
+        sleep_contrib    * 0.40 +
+        activity_contrib * 0.40 +
+        hr_contrib       * 0.20,
+        0, 100
+    )
 
     # -------------------------------------------------
     # 5️⃣ Overall Wellness Score

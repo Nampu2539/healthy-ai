@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 import pandas as pd
 from google import genai
 from google.genai import types
@@ -9,65 +10,92 @@ import json
 import os
 import hashlib
 import time
+import threading
 from collections import defaultdict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-app = FastAPI()
+app = FastAPI(title="Health AI API", version="2.0.0")
+
+# ━━━ CORS — configurable via ALLOWED_ORIGINS env var ━━━
+# Production: ALLOWED_ORIGINS="https://yourapp.com,https://api.yourapp.com"
+# Development: leave unset → defaults to "*"
+_origins_env = os.environ.get("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = [o.strip() for o in _origins_env.split(",")]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
-# ━━━ Rate Limiting & Caching ━━━
-ANALYSIS_CACHE = {}  # {image_hash: (result, timestamp)}
-CACHE_TTL = 3600  # 1 hour
-RATE_LIMIT_WINDOW = 60  # requests per 60 seconds
-MAX_REQUESTS_PER_MINUTE = 6  # More lenient: 6 req/min (Google: 5 req/min + buffer)
-request_tracker = defaultdict(list)  # {endpoint: [timestamp1, timestamp2, ...]}
+# ━━━ API Key Authentication ━━━
+# Set API_KEY env var to enable auth; leave unset to disable (dev mode)
+_API_KEY = os.environ.get("API_KEY")
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-def get_image_hash(image_base64):
-    """Generate hash of image for caching purposes"""
+async def verify_api_key(key: str = Depends(_api_key_header)):
+    """Optional API key guard — enforced only when API_KEY env var is set."""
+    if _API_KEY and key != _API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="ไม่มีสิทธิ์เข้าถึง: API key ไม่ถูกต้องหรือขาดหายไป"
+        )
+    return key
+
+# ━━━ Rate Limiting & Caching ━━━
+ANALYSIS_CACHE: dict = {}
+CACHE_TTL = 3600  # 1 hour
+RATE_LIMIT_WINDOW = 60
+MAX_REQUESTS_PER_MINUTE = 6
+_request_tracker: dict = defaultdict(list)
+_rate_lock = threading.Lock()  # Thread-safe rate limiting
+
+def get_image_hash(image_base64: str) -> str:
     return hashlib.md5(image_base64.encode()).hexdigest()
 
 def check_rate_limit(endpoint: str):
-    """Check if endpoint is within rate limits"""
-    now = time.time()
-    # Clean old requests outside the window
-    old_count = len(request_tracker[endpoint])
-    request_tracker[endpoint] = [t for t in request_tracker[endpoint] if now - t < RATE_LIMIT_WINDOW]
-    cleaned_count = old_count - len(request_tracker[endpoint])
-    
-    print(f"[{endpoint}] Requests in window: {len(request_tracker[endpoint])}/{MAX_REQUESTS_PER_MINUTE} (cleaned {cleaned_count} old)")
-    
-    if len(request_tracker[endpoint]) >= MAX_REQUESTS_PER_MINUTE:
-        oldest_request = request_tracker[endpoint][0]
-        retry_after = int(RATE_LIMIT_WINDOW - (now - oldest_request)) + 1
-        print(f"[{endpoint}] RATE LIMITED - retry after {retry_after}s")
-        raise HTTPException(
-            status_code=429,
-            detail=f"ใช้ AI หนักเกินไป รอ {retry_after} วินาที แล้วลองใหม่นะครับ"
-        )
-    
-    request_tracker[endpoint].append(now)
+    """Thread-safe rate limit enforcer."""
+    with _rate_lock:
+        now = time.time()
+        _request_tracker[endpoint] = [
+            t for t in _request_tracker[endpoint] if now - t < RATE_LIMIT_WINDOW
+        ]
+        count = len(_request_tracker[endpoint])
+        print(f"[{endpoint}] Requests in window: {count}/{MAX_REQUESTS_PER_MINUTE}")
+        if count >= MAX_REQUESTS_PER_MINUTE:
+            oldest = _request_tracker[endpoint][0]
+            retry_after = int(RATE_LIMIT_WINDOW - (now - oldest)) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"ใช้ AI หนักเกินไป รอ {retry_after} วินาที แล้วลองใหม่นะครับ"
+            )
+        _request_tracker[endpoint].append(now)
 
-def get_cached_result(image_hash):
-    """Get cached analysis result if exists and not expired"""
+def get_cached_result(image_hash: str):
     if image_hash in ANALYSIS_CACHE:
-        result, timestamp = ANALYSIS_CACHE[image_hash]
-        if time.time() - timestamp < CACHE_TTL:
+        result, ts = ANALYSIS_CACHE[image_hash]
+        if time.time() - ts < CACHE_TTL:
             return result
-        else:
-            del ANALYSIS_CACHE[image_hash]
+        del ANALYSIS_CACHE[image_hash]
     return None
 
-def set_cached_result(image_hash, result):
-    """Cache analysis result"""
+def set_cached_result(image_hash: str, result):
     ANALYSIS_CACHE[image_hash] = (result, time.time())
 
+# ━━━ Data Layer ━━━
 df = pd.read_csv("data/output/health_recommendations.csv")
+TOTAL_USERS = len(df)
+
+def get_user_or_404(user_id: int):
+    """Return DataFrame row with proper bounds validation."""
+    if user_id < 0 or user_id >= TOTAL_USERS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"ไม่พบ User ID {user_id} (ช่วงที่ถูกต้อง: 0–{TOTAL_USERS - 1})"
+        )
+    return df.iloc[user_id]
+
 
 client_gemini = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -158,7 +186,7 @@ def root():
 
 @app.get("/user/{user_id}")
 def get_user(user_id: int):
-    user = df.iloc[user_id]
+    user = get_user_or_404(user_id)
     return user.to_dict()
 
 @app.get("/analytics")
@@ -172,30 +200,30 @@ def get_analytics():
 
 @app.get("/status")
 def status():
-    """Check current rate limit status for all endpoints"""
+    """Check current rate limit status for all endpoints."""
     now = time.time()
     status_info = {}
-    for endpoint, timestamps in request_tracker.items():
-        # Clean old requests
-        active = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
-        status_info[endpoint] = {
-            "requests_in_window": len(active),
-            "max_allowed": MAX_REQUESTS_PER_MINUTE,
-            "limited": len(active) >= MAX_REQUESTS_PER_MINUTE
-        }
+    with _rate_lock:
+        for endpoint, timestamps in _request_tracker.items():
+            active = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+            status_info[endpoint] = {
+                "requests_in_window": len(active),
+                "max_allowed": MAX_REQUESTS_PER_MINUTE,
+                "limited": len(active) >= MAX_REQUESTS_PER_MINUTE,
+            }
     return {"rate_limits": status_info, "cache_size": len(ANALYSIS_CACHE)}
 
-@app.post("/reset-limiter")
+@app.post("/reset-limiter", dependencies=[Depends(verify_api_key)])
 def reset_limiter():
-    """Reset rate limiter (for testing/debugging only)"""
-    global request_tracker, ANALYSIS_CACHE
-    request_tracker.clear()
+    """Reset rate limiter and cache. Protected — requires X-API-Key header."""
+    with _rate_lock:
+        _request_tracker.clear()
     ANALYSIS_CACHE.clear()
     return {"message": "Rate limiter and cache reset", "status": "OK"}
 
-@app.post("/ai-recommend/{user_id}")
+@app.post("/ai-recommend/{user_id}", dependencies=[Depends(verify_api_key)])
 async def ai_recommend(user_id: int):
-    user = df.iloc[user_id]
+    user = get_user_or_404(user_id)
     prompt = f"""ข้อมูลสุขภาพของผู้ใช้:
 อายุ {user['Age']} ปี BMI {round(user['BMI'], 1)} คะแนนการนอน {user['Sleep_Health_Score']}/100 คะแนนการออกกำลังกาย {user['Activity_Health_Score']}/100 คะแนนหัวใจ {user['Cardiovascular_Health_Score']}/100 คะแนนสุขภาพจิต {user['Mental_Health_Score']}/100 คะแนนรวม {round(user['Overall_Wellness_Score'], 1)}/100
 
@@ -227,7 +255,7 @@ async def ai_recommend(user_id: int):
             detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
-@app.post("/symptom-check")
+@app.post("/symptom-check", dependencies=[Depends(verify_api_key)])
 async def symptom_check(data: dict):
     symptoms = data.get("symptoms", "")
     age = data.get("age", "ไม่ระบุ")
@@ -263,7 +291,7 @@ async def symptom_check(data: dict):
             detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(verify_api_key)])
 async def chat(data: dict):
     messages = data.get("messages", [])
     if not messages:
@@ -287,7 +315,7 @@ async def chat(data: dict):
             detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
-@app.post("/analyze-food")
+@app.post("/analyze-food", dependencies=[Depends(verify_api_key)])
 async def analyze_food(data: dict):
     image_base64 = data.get("image", "")
     image_hash = get_image_hash(image_base64)
@@ -334,7 +362,7 @@ async def analyze_food(data: dict):
             detail="เกิดข้อผิดพลาด ลองใหม่ในสักครู่นะครับ"
         )
 
-@app.post("/calculate-wellness")
+@app.post("/calculate-wellness", dependencies=[Depends(verify_api_key)])
 async def calculate_wellness(data: dict):
     age = data.get("age", 25)
     weight = data.get("weight", 60)

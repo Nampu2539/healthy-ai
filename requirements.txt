@@ -1,4 +1,10 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
 google-genai
+tenacity
+streamlit
+scikit-learn
+plotly
+python-dotenv
+kagglehub
