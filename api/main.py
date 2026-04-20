@@ -192,10 +192,14 @@ def get_user(user_id: int):
 @app.get("/analytics")
 def get_analytics():
     return {
-        "avg_wellness": float(df["Overall_Wellness_Score"].mean()),
-        "avg_sleep": float(df["Sleep_Health_Score"].mean()),
-        "total_users": len(df),
-        "segments": df["User_Segment"].value_counts().to_dict()
+        "avg_wellness":        float(df["Overall_Wellness_Score"].mean()),
+        "avg_sleep":           float(df["Sleep_Health_Score"].mean()),
+        "avg_activity":        float(df["Activity_Health_Score"].mean()),
+        "avg_cardiovascular":  float(df["Cardiovascular_Health_Score"].mean()),
+        "avg_mental":          float(df["Mental_Health_Score"].mean()),
+        "avg_bmi_score":       float(df["BMI_Health_Score"].mean()) if "BMI_Health_Score" in df.columns else 70.0,
+        "total_users":         len(df),
+        "segments":            df["User_Segment"].value_counts().to_dict()
     }
 
 @app.get("/status")
